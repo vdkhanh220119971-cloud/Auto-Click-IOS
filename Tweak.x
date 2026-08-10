@@ -1,32 +1,7 @@
 #import <UIKit/UIKit.h>
 #import <CoreGraphics/CoreGraphics.h>
-
-// Định nghĩa các hàm Private CAPI của Apple để tạo IOHIDEvent cấp thấp
-typedef struct __IOHIDEvent * IOHIDEventRef;
-typedef uint32_t IOHIDDigitizerTransducerType;
-
-FOUNDATION_EXTERN IOHIDEventRef IOHIDEventCreateDigitizerFingerEvent(
-    CFAllocatorRef allocator,
-    uint64_t timeStamp,
-    uint32_t index,
-    uint32_t identity,
-    uint32_t eventOptions,
-    float x,
-    float y,
-    float z,
-    float tipPressure,
-    float twist,
-    Boolean range,
-    Boolean touch,
-    uint32_t options
-);
-
-FOUNDATION_EXTERN void IOHIDEventAppendEvent(IOHIDEventRef parent, IOHIDEventRef child, uint32_t options);
-
-// Khởi tạo client kết nối đến hệ thống cảm ứng
-typedef struct __IOHIDEventSystemClient * IOHIDEventSystemClientRef;
-FOUNDATION_EXTERN IOHIDEventSystemClientRef IOHIDEventSystemClientCreate(CFAllocatorRef allocator);
-FOUNDATION_EXTERN void IOHIDEventSystemClientDispatchEvent(IOHIDEventSystemClientRef client, IOHIDEventRef event);
+#import <dlfcn.h>
+#import <mach/mach_time.h>
 
 static BOOL isRunning = NO;
 static NSTimer *clickTimer = nil;
@@ -41,7 +16,7 @@ static UIView *targetPin = nil;
 + (void)setupOverlay;
 + (void)toggleAction;
 + (void)toggleTargetPin;
-+ (void)sendLowLevelTouchAtPoint:(CGPoint)point;
++ (void)performClick;
 @end
 
 @implementation AutoClickEngine
@@ -156,10 +131,9 @@ static UIView *targetPin = nil;
         toggleBtn.backgroundColor = [UIColor systemRedColor];
         targetPin.backgroundColor = [[UIColor systemBlueColor] colorWithAlphaComponent:0.6];
 
-        // Tốc độ nhấp: 0.15 giây / lần
         clickTimer = [NSTimer timerWithTimeInterval:0.15 
                                              target:self 
-                                           selector:@selector(triggerClick) 
+                                           selector:@selector(performClick) 
                                            userInfo:nil 
                                             repeats:YES];
         [[NSRunLoop mainRunLoop] addTimer:clickTimer forMode:NSRunLoopCommonModes];
@@ -173,60 +147,56 @@ static UIView *targetPin = nil;
     }
 }
 
-+ (void)triggerClick {
-    [self sendLowLevelTouchAtPoint:targetPoint];
-}
-
-// LÕI XỬ LÝ: MÔ PHỎNG SỰ KIỆN CẢM ỨNG CẤP THẤP TỐI ƯU NHẤT
-+ (void)sendLowLevelTouchAtPoint:(CGPoint)point {
-    UIScreen *mainScreen = [UIScreen mainScreen];
-    CGRect bounds = mainScreen.bounds;
-    
-    // Chuẩn hóa tọa độ theo tỉ lệ màn hình thực tế (Normalized Coordinates 0.0 -> 1.0)
-    float normalizedX = point.x / bounds.size.width;
-    float normalizedY = point.y / bounds.size.height;
-
-    uint64_t now = mach_absolute_time();
-
-    // 1. Tạo sự kiện Chạm ngón tay xuống (Touch Down)
-    IOHIDEventRef eventDown = IOHIDEventCreateDigitizerFingerEvent(
-        kCFAllocatorDefault, now, 1, 0, 0,
-        normalizedX, normalizedY, 0, 1.0, 0,
-        1, 1, 0
-    );
-
-    // 2. Tạo sự kiện Nhấc ngón tay lên (Touch Up)
-    IOHIDEventRef eventUp = IOHIDEventCreateDigitizerFingerEvent(
-        kCFAllocatorDefault, now + 10000000, 1, 0, 0,
-        normalizedX, normalizedY, 0, 0.0, 0,
-        0, 0, 0
-    );
-
-    // Phát lệnh gửi Touch Down qua ứng dụng
++ (void)performClick {
     UIWindow *keyWin = menuView.window;
-    if (keyWin) {
-        // Gửi sự kiện trực tiếp vào cổng tiếp nhận Responder của App
-        UIView *hitView = [keyWin hitTest:point withEvent:nil];
-        if (hitView && hitView != menuView && hitView != targetPin) {
-            UITouch *touch = [[UITouch alloc] init];
-            [touch setValue:@(UITouchPhaseBegan) forKey:@"phase"];
-            [touch setValue:keyWin forKey:@"window"];
-            [touch setValue:hitView forKey:@"view"];
-            [touch setValue:[NSValue valueWithCGPoint:point] forKey:@"locationInWindow"];
+    if (!keyWin) return;
 
-            UIEvent *event = [[UIApplication sharedApplication] performSelector:@selector(_touchesEvent)];
-            if (event) {
-                [hitView touchesBegan:[NSSet setWithObject:touch] withEvent:event];
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.03 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                    [touch setValue:@(UITouchPhaseEnded) forKey:@"phase"];
-                    [hitView touchesEnded:[NSSet setWithObject:touch] withEvent:event];
-                });
-            }
-        }
+    // Ẩn tạm thời overlay để hitTest không bị cản bởi Menu/Pin
+    menuView.hidden = YES;
+    targetPin.hidden = YES;
+
+    UIView *hitView = [keyWin hitTest:targetPoint withEvent:nil];
+
+    menuView.hidden = NO;
+    targetPin.hidden = NO;
+
+    if (!hitView) return;
+
+    // 1. Tối ưu cho UIControl (Nút bấm tiêu chuẩn)
+    if ([hitView isKindOfClass:[UIControl class]]) {
+        UIControl *control = (UIControl *)hitView;
+        [control sendActionsForControlEvents:UIControlEventTouchUpInside];
+        return;
     }
 
-    if (eventDown) CFRelease(eventDown);
-    if (eventUp) CFRelease(eventUp);
+    // 2. Tối ưu mô phỏng Touch Event chuẩn với Responder Chain
+    UITouch *touch = [[UITouch alloc] init];
+    [touch setValue:@(UITouchPhaseBegan) forKey:@"phase"];
+    [touch setValue:keyWin forKey:@"window"];
+    [touch setValue:hitView forKey:@"view"];
+    [touch setValue:[NSValue valueWithCGPoint:targetPoint] forKey:@"locationInWindow"];
+    [touch setValue:@1 forKey:@"tapCount"];
+
+    UIEvent *event = nil;
+    if ([[UIApplication sharedApplication] respondsToSelector:@selector(_touchesEvent)]) {
+        #pragma clang diagnostic push
+        #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+        event = [[UIApplication sharedApplication] performSelector:@selector(_touchesEvent)];
+        #pragma clang diagnostic pop
+    }
+
+    // Gửi giai đoạn Bắt đầu Chạm (Touch Began)
+    if ([hitView respondsToSelector:@selector(touchesBegan:withEvent:)]) {
+        [hitView touchesBegan:[NSSet setWithObject:touch] withEvent:event];
+    }
+
+    // Gửi giai đoạn Kết thúc Chạm (Touch Ended) sau 0.02 giây
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.02 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [touch setValue:@(UITouchPhaseEnded) forKey:@"phase"];
+        if ([hitView respondsToSelector:@selector(touchesEnded:withEvent:)]) {
+            [hitView touchesEnded:[NSSet setWithObject:touch] withEvent:event];
+        }
+    });
 }
 
 @end
