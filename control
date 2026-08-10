@@ -3,7 +3,7 @@ Name: AutoClicker
 Depends: mobilesubstrate
 Version: 1.0.0
 Architecture: iphoneos-arm
-Description: Auto Clicker Dylib
-Maintainer: Custom
-Author: Custom
+Description: Auto Clicker Dylib cho iOS
+Maintainer: Developer
+Author: Developer
 Section: Tweaks
