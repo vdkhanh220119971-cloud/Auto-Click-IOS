@@ -1,6 +1,22 @@
 #import <UIKit/UIKit.h>
-#import <objc/runtime.h>
+#import <dlfcn.h>
+#import <mach/mach_time.h>
+#import "GCDAsyncSocket.h"
 
+// --- DEFINITIONS CHO PRIVATE IOHIDEVENT ---
+typedef struct __IOHIDEvent * IOHIDEventRef;
+typedef struct __IOHIDEventSystemClient * IOHIDEventSystemClientRef;
+
+#define kIOHIDDigitizerEventRange 0x00000001
+#define kIOHIDDigitizerEventTouch 0x00000002
+
+static IOHIDEventRef (*$IOHIDEventCreateDigitizerFingerEvent)(CFAllocatorRef, uint64_t, uint32_t, uint32_t, uint32_t, float, float, float, float, float, Boolean, Boolean, uint32_t) = NULL;
+static IOHIDEventSystemClientRef (*$IOHIDEventSystemClientCreate)(CFAllocatorRef) = NULL;
+static void (*$IOHIDEventSystemClientDispatchEvent)(IOHIDEventSystemClientRef, IOHIDEventRef) = NULL;
+
+static IOHIDEventSystemClientRef sharedHIDClient = NULL;
+
+// --- TRẠNG THÁI TOÀN CỤC ---
 static BOOL isRunning = NO;
 static NSTimer *clickTimer = nil;
 static CGPoint targetPoint = {150, 300};
@@ -10,28 +26,122 @@ static UIButton *toggleBtn = nil;
 static UIButton *targetBtn = nil;
 static UIView *targetPin = nil;
 
-static UIEvent *lastRealEvent = nil;
+static GCDAsyncSocket *clientSocket = nil;
 
-// HOOK TRỰC TIẾP VÀO LƯỒNG EVENT CỦA APP ĐỂ BẮT VÀ NHÂN BẢN EVENT THẬT
-%hook UIApplication
-- (void)sendEvent:(UIEvent *)event {
-    if (event.type == UIEventTypeTouches) {
-        NSSet *touches = [event allTouches];
-        UITouch *touch = [touches anyObject];
-        // Lưu lại sự kiện thật gần nhất do người dùng tự bấm (không phải do Tweak tạo)
-        if (touch && touch.view != menuView && touch.view != targetPin && ![touch.view isDescendantOfView:menuView]) {
-            lastRealEvent = event;
-        }
-    }
-    %orig;
+// --- SERVER BƠM LỆNH PHẦN CỨNG BẰNG GCDASYNCSOCKET ---
+@interface TouchServer : NSObject <GCDAsyncSocketDelegate>
+@property (nonatomic, strong) GCDAsyncSocket *serverSocket;
+@property (nonatomic, strong) dispatch_queue_t socketQueue;
++ (instancetype)sharedInstance;
+- (void)startServer;
+- (void)injectTouchAtX:(float)x y:(float)y;
+@end
+
+@implementation TouchServer
+
++ (instancetype)sharedInstance {
+    static TouchServer *instance = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        instance = [[TouchServer alloc] init];
+    });
+    return instance;
 }
-%end
 
-@interface AutoClickEngine : NSObject
+- (void)startServer {
+    self.socketQueue = dispatch_queue_create("com.autoclick.socketQueue", DISPATCH_QUEUE_SERIAL);
+    self.serverSocket = [[GCDAsyncSocket alloc] initWithDelegate:self delegateQueue:self.socketQueue];
+    
+    NSError *err = nil;
+    if ([self.serverSocket acceptOnPort:8181 error:&err]) {
+        NSLog(@"[AutoTouch] GCDAsyncSocket Listening on Port 8181");
+    }
+}
+
+- (void)socket:(GCDAsyncSocket *)sock didAcceptNewSocket:(GCDAsyncSocket *)newSocket {
+    [newSocket readDataWithTimeout:-1 tag:0];
+}
+
+- (void)socket:(GCDAsyncSocket *)sock didReadData:(NSData *)data withTag:(long)tag {
+    NSString *msg = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    msg = [msg stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    
+    NSArray *parts = [msg componentsSeparatedByString:@","];
+    if (parts.count == 2) {
+        float x = [parts[0] floatValue];
+        float y = [parts[1] floatValue];
+        [self injectTouchAtX:x y:y];
+    }
+    
+    [sock readDataWithTimeout:-1 tag:0];
+}
+
+// Bơm Touch ở cấp hệ thống thông qua IOHIDEvent
+- (void)injectTouchAtX:(float)x y:(float)y {
+    if (!$IOHIDEventCreateDigitizerFingerEvent || !$IOHIDEventSystemClientDispatchEvent) return;
+    if (!sharedHIDClient && $IOHIDEventSystemClientCreate) {
+        sharedHIDClient = $IOHIDEventSystemClientCreate(kCFAllocatorDefault);
+    }
+    if (!sharedHIDClient) return;
+
+    CGSize screen = [UIScreen mainScreen].bounds.size;
+    float normX = x / screen.width;
+    float normY = y / screen.height;
+
+    uint64_t timestamp = mach_absolute_time();
+
+    // 1. Touch Down
+    IOHIDEventRef eventDown = $IOHIDEventCreateDigitizerFingerEvent(
+        kCFAllocatorDefault, 
+        timestamp, 
+        1, 
+        0, 
+        kIOHIDDigitizerEventRange | kIOHIDDigitizerEventTouch, 
+        normX, normY, 0, 
+        1.0, 
+        0, 
+        1, 
+        1, 
+        0
+    );
+
+    if (eventDown) {
+        $IOHIDEventSystemClientDispatchEvent(sharedHIDClient, eventDown);
+        CFRelease(eventDown);
+    }
+
+    // Giữ phím 20ms giả lập thao tác tay thật
+    usleep(20000);
+
+    // 2. Touch Up
+    timestamp = mach_absolute_time();
+    IOHIDEventRef eventUp = $IOHIDEventCreateDigitizerFingerEvent(
+        kCFAllocatorDefault, 
+        timestamp, 
+        1, 
+        0, 
+        kIOHIDDigitizerEventRange | kIOHIDDigitizerEventTouch, 
+        normX, normY, 0, 
+        0.0, 
+        0, 
+        0, 
+        0, 
+        0
+    );
+
+    if (eventUp) {
+        $IOHIDEventSystemClientDispatchEvent(sharedHIDClient, eventUp);
+        CFRelease(eventUp);
+    }
+}
+
+@end
+
+// --- UI OVERLAY & ĐIỀU KHIỂN ---
+@interface AutoClickEngine : NSObject <GCDAsyncSocketDelegate>
 + (void)setupOverlay;
 + (void)toggleAction;
-+ (void)toggleTargetPin;
-+ (void)performInternalClick;
++ (void)sendTouchCommand;
 @end
 
 @implementation AutoClickEngine
@@ -69,6 +179,11 @@ static UIEvent *lastRealEvent = nil;
 
         if (menuView) return;
 
+        // Khởi tạo Socket Client kết nối đến Local Server
+        dispatch_queue_t clientQueue = dispatch_queue_create("com.autoclick.clientQueue", DISPATCH_QUEUE_SERIAL);
+        clientSocket = [[GCDAsyncSocket alloc] initWithDelegate:nil delegateQueue:clientQueue];
+        [clientSocket connectToHost:@"127.0.0.1" onPort:8181 error:nil];
+
         // 1. Tâm Ghim
         targetPin = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 36, 36)];
         targetPin.center = targetPoint;
@@ -76,13 +191,12 @@ static UIEvent *lastRealEvent = nil;
         targetPin.layer.cornerRadius = 18;
         targetPin.layer.borderWidth = 2;
         targetPin.layer.borderColor = [UIColor whiteColor].CGColor;
-        targetPin.userInteractionEnabled = YES;
         
         UIView *centerDot = [[UIView alloc] initWithFrame:CGRectMake(16, 16, 4, 4)];
         centerDot.backgroundColor = [UIColor whiteColor];
         centerDot.layer.cornerRadius = 2;
         [targetPin addSubview:centerDot];
-        
+
         UIPanGestureRecognizer *pinPan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(dragPin:)];
         [targetPin addGestureRecognizer:pinPan];
         [window addSubview:targetPin];
@@ -146,9 +260,9 @@ static UIEvent *lastRealEvent = nil;
         toggleBtn.backgroundColor = [UIColor systemRedColor];
         targetPin.backgroundColor = [[UIColor systemBlueColor] colorWithAlphaComponent:0.6];
 
-        clickTimer = [NSTimer timerWithTimeInterval:0.25 
+        clickTimer = [NSTimer timerWithTimeInterval:0.15 
                                              target:self 
-                                           selector:@selector(performInternalClick) 
+                                           selector:@selector(sendTouchCommand) 
                                            userInfo:nil 
                                             repeats:YES];
         [[NSRunLoop mainRunLoop] addTimer:clickTimer forMode:NSRunLoopCommonModes];
@@ -162,51 +276,34 @@ static UIEvent *lastRealEvent = nil;
     }
 }
 
-+ (void)performInternalClick {
-    UIWindow *keyWin = menuView.window;
-    if (!keyWin) return;
-
-    menuView.hidden = YES;
-    targetPin.hidden = YES;
-
-    UIView *hitView = [keyWin hitTest:targetPoint withEvent:nil];
-
-    menuView.hidden = NO;
-    targetPin.hidden = NO;
-
-    if (!hitView) return;
-
-    // Kích hoạt direct responder nếu là UIControl
-    if ([hitView isKindOfClass:[UIControl class]]) {
-        [(UIControl *)hitView sendActionsForControlEvents:UIControlEventTouchUpInside];
++ (void)sendTouchCommand {
+    if (![clientSocket isConnected]) {
+        [clientSocket connectToHost:@"127.0.0.1" onPort:8181 error:nil];
     }
-
-    // Tạo giả lập touch tương thích tối đa với Sandbox
-    UITouch *touch = [[UITouch alloc] init];
-    [touch setValue:@(UITouchPhaseBegan) forKey:@"phase"];
-    [touch setValue:keyWin forKey:@"window"];
-    [touch setValue:hitView forKey:@"view"];
-    [touch setValue:[NSValue valueWithCGPoint:targetPoint] forKey:@"locationInWindow"];
-    [touch setValue:@1 forKey:@"tapCount"];
-
-    // Gửi sự kiện qua Responder Chain
-    [hitView touchesBegan:[NSSet setWithObject:touch] withEvent:lastRealEvent];
-
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [touch setValue:@(UITouchPhaseEnded) forKey:@"phase"];
-        [hitView touchesEnded:[NSSet setWithObject:touch] withEvent:lastRealEvent];
-    });
+    
+    NSString *payload = [NSString stringWithFormat:@"%.2f,%.2f\n", targetPoint.x, targetPoint.y];
+    NSData *data = [payload dataUsingEncoding:NSUTF8StringEncoding];
+    [clientSocket writeData:data withTimeout:-1 tag:0];
 }
 
 @end
 
-__attribute__((constructor)) static void initializeAutoClicker() {
-    %init;
+// --- INIT DYNAMIC BINDINGS ---
+__attribute__((constructor)) static void initializeEngine() {
+    void *ioKit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW);
+    if (ioKit) {
+        $IOHIDEventCreateDigitizerFingerEvent = dlsym(ioKit, "IOHIDEventCreateDigitizerFingerEvent");
+        $IOHIDEventSystemClientCreate = dlsym(ioKit, "IOHIDEventSystemClientCreate");
+        $IOHIDEventSystemClientDispatchEvent = dlsym(ioKit, "IOHIDEventSystemClientDispatchEvent");
+    }
+
+    [[TouchServer sharedInstance] startServer];
+
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification 
                                                       object:nil 
                                                        queue:[NSOperationQueue mainQueue] 
                                                   usingBlock:^(NSNotification * _Nonnull note) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             [AutoClickEngine setupOverlay];
         });
     }];
