@@ -13,20 +13,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Dependencies
+      - name: Install dependencies
         run: |
-          brew install dpkg ldid ninja
+          HOMEBREW_NO_AUTO_UPDATE=1 brew install dpkg ldid
 
-      - name: Setup Theos & SDKs
+      - name: Setup Theos
         run: |
           git clone --recursive https://github.com/theos/theos.git $HOME/theos
           echo "THEOS=$HOME/theos" >> $GITHUB_ENV
           
-          # Tải SDK iOS chính thức cho Theos
-          curl -LO https://github.com/theos/sdks/archive/master.zip
-          unzip -q master.zip
-          mv sdks-master/* $HOME/theos/sdks/
-          rm -rf sdks-master master.zip
+          # Tải iOS SDK chính thức cho Theos
+          git clone --depth=1 https://github.com/theos/sdks.git $HOME/theos/sdks
 
       - name: Build Tweak
         run: |
