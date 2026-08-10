@@ -8,7 +8,7 @@ include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = AutoClicker
 AutoClicker_FILES = Tweak.x
-AutoClicker_FRAMEWORKS = UIKit CoreGraphics
-AutoClicker_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Wno-unused-variable -Wno-error
+AutoClicker_FRAMEWORKS = UIKit CoreGraphics IOKit
+AutoClicker_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Wno-unused-variable -Wno-error -Wno-implicit-function-declaration
 
 include $(THEOS_MAKE_PATH)/tweak.mk
