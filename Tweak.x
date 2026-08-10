@@ -19,11 +19,9 @@ static UIView *targetPin = nil;
 @implementation AutoClickEngine
 
 + (void)setupOverlay {
-    // Đảm bảo code giao diện CHỈ chạy trên Main Thread
     dispatch_async(dispatch_get_main_queue(), ^{
         UIWindow *window = nil;
         
-        // Tìm Window khả dụng an toàn
         if (@available(iOS 13.0, *)) {
             for (UIWindowScene *scene in [UIApplication sharedApplication].connectedScenes) {
                 if (scene.activationState == UISceneActivationStateForegroundActive) {
@@ -45,7 +43,6 @@ static UIView *targetPin = nil;
             #pragma clang diagnostic pop
         }
         
-        // Nếu vẫn chưa tìm thấy Window, thử lại sau 0.5s chứ KHÔNG làm văng app
         if (!window) {
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                 [AutoClickEngine setupOverlay];
@@ -53,17 +50,22 @@ static UIView *targetPin = nil;
             return;
         }
 
-        // Tránh tạo lại giao diện nếu đã tồn tại
         if (menuView) return;
 
-        // 1. Tạo Tâm Ghim
-        targetPin = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 30, 30)];
+        // 1. Tạo Tâm Ghim (Hiển thị mặc định ngay từ đầu)
+        targetPin = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 36, 36)];
         targetPin.center = targetPoint;
-        targetPin.backgroundColor = [[UIColor systemRedColor] colorWithAlphaComponent:0.6];
-        targetPin.layer.cornerRadius = 15;
+        targetPin.backgroundColor = [[UIColor systemRedColor] colorWithAlphaComponent:0.5];
+        targetPin.layer.cornerRadius = 18;
         targetPin.layer.borderWidth = 2;
         targetPin.layer.borderColor = [UIColor whiteColor].CGColor;
-        targetPin.hidden = YES;
+        targetPin.userInteractionEnabled = YES;
+        
+        // Thêm nhân tâm nhỏ ở giữa để dễ canh vị trí
+        UIView *centerDot = [[UIView alloc] initWithFrame:CGRectMake(16, 16, 4, 4)];
+        centerDot.backgroundColor = [UIColor whiteColor];
+        centerDot.layer.cornerRadius = 2;
+        [targetPin addSubview:centerDot];
         
         UIPanGestureRecognizer *pinPan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(dragPin:)];
         [targetPin addGestureRecognizer:pinPan];
@@ -79,7 +81,7 @@ static UIView *targetPin = nil;
         UIPanGestureRecognizer *menuPan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(dragMenu:)];
         [menuView addGestureRecognizer:menuPan];
 
-        // 3. Nút Dừng/Tiếp tục
+        // 3. Nút Dừng / Tiếp tục
         toggleBtn = [UIButton buttonWithType:UIButtonTypeCustom];
         toggleBtn.frame = CGRectMake(6, 6, 110, 32);
         toggleBtn.layer.cornerRadius = 16;
@@ -89,7 +91,7 @@ static UIView *targetPin = nil;
         [toggleBtn addTarget:self action:@selector(toggleAction) forControlEvents:UIControlEventTouchUpInside];
         [menuView addSubview:toggleBtn];
 
-        // 4. Nút Chỉnh Tâm
+        // 4. Nút Ẩn/Hiện Tâm Ghim
         targetBtn = [UIButton buttonWithType:UIButtonTypeCustom];
         targetBtn.frame = CGRectMake(122, 6, 52, 32);
         targetBtn.layer.cornerRadius = 16;
@@ -115,7 +117,7 @@ static UIView *targetPin = nil;
     CGPoint translation = [pan translationInView:view.superview];
     view.center = CGPointMake(view.center.x + translation.x, view.center.y + translation.y);
     [pan setTranslation:CGPointZero inView:view.superview];
-    targetPoint = view.center;
+    targetPoint = view.center; // Lưu vị trí tọa độ mới
 }
 
 + (void)toggleTargetPin {
@@ -126,56 +128,88 @@ static UIView *targetPin = nil;
 + (void)toggleAction {
     isRunning = !isRunning;
     if (isRunning) {
+        // Trạng thái ĐANG CHẠY
         [toggleBtn setTitle:@"⏸ DỪNG" forState:UIControlStateNormal];
         toggleBtn.backgroundColor = [UIColor systemRedColor];
-        targetPin.hidden = YES;
-        targetBtn.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.15];
+        
+        // GIỮ NGUYÊN TÂM GHIM VÀ ĐỔI SANG MÀU XANH DƯƠNG ĐỂ BÁO ĐANG AUTO CLICK
+        targetPin.hidden = NO;
+        targetPin.backgroundColor = [[UIColor systemBlueColor] colorWithAlphaComponent:0.6];
 
-        clickTimer = [NSTimer timerWithTimeInterval:0.1 
+        clickTimer = [NSTimer timerWithTimeInterval:0.15 
                                              target:self 
                                            selector:@selector(performClick) 
                                            userInfo:nil 
                                             repeats:YES];
         [[NSRunLoop mainRunLoop] addTimer:clickTimer forMode:NSRunLoopCommonModes];
     } else {
+        // Trạng thái DỪNG
         [toggleBtn setTitle:@"▶ TIẾP TỤC" forState:UIControlStateNormal];
         toggleBtn.backgroundColor = [UIColor systemGreenColor];
+        
+        // Đổi tâm ghim lại màu đỏ
+        targetPin.backgroundColor = [[UIColor systemRedColor] colorWithAlphaComponent:0.5];
+
         [clickTimer invalidate];
         clickTimer = nil;
     }
 }
 
+// HÀM MÔ PHỎNG CLICK ĐÃ ĐƯỢC NÂNG CẤP VỚI 3 LỚP XỬ LÝ
 + (void)performClick {
     UIWindow *window = menuView.window;
     if (!window) return;
 
+    // Tạm thời ẩn Menu và Tâm ghim cực ngắn để hitTest xuyên qua tìm đúng Nút nằm phía dưới
+    menuView.hidden = YES;
+    targetPin.hidden = YES;
+
     UIView *hitView = [window hitTest:targetPoint withEvent:nil];
-    if (hitView) {
-        if ([hitView isKindOfClass:[UIButton class]]) {
-            UIButton *btn = (UIButton *)hitView;
-            [btn sendActionsForControlEvents:UIControlEventTouchUpInside];
-        } else {
-            UITouch *touch = [[UITouch alloc] init];
-            SEL touchBegan = @selector(touchesBegan:withEvent:);
-            SEL touchEnded = @selector(touchesEnded:withEvent:);
-            
-            if ([hitView respondsToSelector:touchBegan]) {
-                [hitView touchesBegan:[NSSet setWithObject:touch] withEvent:nil];
-            }
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.02 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                if ([hitView respondsToSelector:touchEnded]) {
-                    [hitView touchesEnded:[NSSet setWithObject:touch] withEvent:nil];
+
+    // Hiện lại Menu và Tâm ghim
+    menuView.hidden = NO;
+    targetPin.hidden = NO;
+
+    if (hitView && hitView != menuView && hitView != targetPin) {
+        
+        // Cách 1: Nếu điểm bấm là UIButton / UIControl
+        if ([hitView isKindOfClass:[UIControl class]]) {
+            UIControl *control = (UIControl *)hitView;
+            [control sendActionsForControlEvents:UIControlEventTouchUpInside];
+        } 
+        
+        // Cách 2: Kiểm tra xem View dưới điểm nhấp có Gesture Recognizer (Tap Gesture) không
+        if (hitView.gestureRecognizers.count > 0) {
+            for (UIGestureRecognizer *recognizer in hitView.gestureRecognizers) {
+                if ([recognizer isKindOfClass:[UITapGestureRecognizer class]]) {
+                    #pragma clang diagnostic push
+                    #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+                    [recognizer.self performSelector:@selector(touchesBegan:withEvent:) withObject:nil];
+                    #pragma clang diagnostic pop
                 }
-            });
+            }
         }
+        
+        // Cách 3: Gửi bộ Touch Event chuẩn
+        UITouch *touch = [[UITouch alloc] init];
+        SEL touchBegan = @selector(touchesBegan:withEvent:);
+        SEL touchEnded = @selector(touchesEnded:withEvent:);
+        
+        if ([hitView respondsToSelector:touchBegan]) {
+            [hitView touchesBegan:[NSSet setWithObject:touch] withEvent:nil];
+        }
+        
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.03 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if ([hitView respondsToSelector:touchEnded]) {
+                [hitView touchesEnded:[NSSet setWithObject:touch] withEvent:nil];
+            }
+        });
     }
 }
 
 @end
 
-// KHỞI TẠO AN TOÀN CHO APP NON-JAILBREAK (TIÊM DYLIB DIRECT)
 __attribute__((constructor)) static void initializeAutoClicker() {
-    // Đăng ký nhận thông báo khi App kích hoạt xong để hiện Menu
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification 
                                                       object:nil 
                                                        queue:[NSOperationQueue mainQueue] 
