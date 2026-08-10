@@ -13,21 +13,26 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Theos
+      - name: Setup Theos & iOS SDK
         run: |
           git clone --recursive https://github.com/theos/theos.git $HOME/theos
           echo "THEOS=$HOME/theos" >> $GITHUB_ENV
+          
+          # Tải SDK iOS cơ bản cho Theos
+          curl -LO https://github.com/theos/sdks/archive/master.zip
+          unzip -q master.zip
+          mv sdks-master/* $HOME/theos/sdks/
+          rm -rf sdks-master master.zip
 
       - name: Build Tweak
         run: |
-          make clean
-          make FINALPACKAGE=1
+          $HOME/theos/bin/make clean
+          $HOME/theos/bin/make FINALPACKAGE=1
 
       - name: Upload Dylib Artifact
         uses: actions/upload-artifact@v4
         with:
           name: AutoClicker-Dylib
           path: |
-            .theos/obj/FINALPACKAGE/*.dylib
             .theos/obj/*.dylib
             .theos/obj/debug/*.dylib
