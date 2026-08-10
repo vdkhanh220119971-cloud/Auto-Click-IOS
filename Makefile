@@ -7,8 +7,9 @@ ARCHS = arm64 arm64e
 include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = AutoClicker
-AutoClicker_FILES = Tweak.x
-AutoClicker_FRAMEWORKS = UIKit CoreGraphics IOKit
-AutoClicker_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Wno-unused-variable -Wno-error -Wno-implicit-function-declaration
+# Đưa thêm file GCDAsyncSocket.m vào quá trình biên dịch
+AutoClicker_FILES = Tweak.x GCDAsyncSocket.m
+AutoClicker_FRAMEWORKS = UIKit CoreGraphics CFNetwork IOKit
+AutoClicker_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Wno-nullability-completeness
 
 include $(THEOS_MAKE_PATH)/tweak.mk
