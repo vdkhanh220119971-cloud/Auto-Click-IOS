@@ -22,11 +22,9 @@ jobs:
           git clone --recursive https://github.com/theos/theos.git $HOME/theos
           echo "THEOS=$HOME/theos" >> $GITHUB_ENV
           
-          # Tải SDK chính thức và giải nén thẳng vào thư mục sdks
-          curl -LO https://github.com/theos/sdks/archive/master.zip
-          unzip -q master.zip
-          cp -r sdks-master/* $HOME/theos/sdks/
-          rm -rf sdks-master master.zip
+          # Xóa thư mục sdks trống mặc định và tải trọn bộ SDKs chuẩn
+          rm -rf $HOME/theos/sdks
+          git clone --depth=1 https://github.com/theos/sdks.git $HOME/theos/sdks
 
       - name: Build Tweak
         run: |
