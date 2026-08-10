@@ -35,7 +35,7 @@ jobs:
       - name: Upload Dylib Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AutoClicker-Dylib
+          name: AutoClicker-Dylib 
           path: |
             .theos/obj/*.dylib
             .theos/obj/debug/*.dylib
