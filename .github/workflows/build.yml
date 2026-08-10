@@ -7,11 +7,11 @@ on:
 
 jobs:
   build:
-    runs-on: macos-13
+    runs-on: macos-latest
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Setup Theos
         run: |
@@ -23,8 +23,11 @@ jobs:
           make clean
           make FINALPACKAGE=1
 
-      - name: Find and Upload Dylib
+      - name: Upload Dylib Artifact
         uses: actions/upload-artifact@v4
         with:
           name: AutoClicker-Dylib
-          path: .theos/obj/debug/AutoClicker.dylib
+          path: |
+            .theos/obj/FINALPACKAGE/*.dylib
+            .theos/obj/*.dylib
+            .theos/obj/debug/*.dylib
