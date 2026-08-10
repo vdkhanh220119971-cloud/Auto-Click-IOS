@@ -22,15 +22,15 @@ jobs:
           git clone --recursive https://github.com/theos/theos.git $HOME/theos
           echo "THEOS=$HOME/theos" >> $GITHUB_ENV
           
-          # Xóa thư mục sdks trống mặc định và tải trọn bộ SDKs chuẩn
+          # Dọn dẹp và tải bộ SDKs chuẩn
           rm -rf $HOME/theos/sdks
           git clone --depth=1 https://github.com/theos/sdks.git $HOME/theos/sdks
 
       - name: Build Tweak
         run: |
           export THEOS=$HOME/theos
-          $THEOS/bin/make clean
-          $THEOS/bin/make FINALPACKAGE=1
+          make clean
+          make FINALPACKAGE=1
 
       - name: Upload Dylib Artifact
         uses: actions/upload-artifact@v4
